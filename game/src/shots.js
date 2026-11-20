@@ -1,79 +1,148 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// SOLMARA — shots.js
+// Deterministic screenshot scenes (?shot=cover|drive|mission|night&seed=1).
+// Each scene stages the real game state (real entities, real render path) and
+// then freezes the simulation, so the same seed always gives the same frame.
 
-const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
-
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
-    }
-  }
-  return Infinity;
+function resetWorldForShot(seed) {
+  buildCity(seed || 1);
+  Game.cars = []; Game.peds = []; Game.cops = []; Game.enemies = [];
+  Game.bullets = []; Game.particles = []; Game.pickups = []; Game.decals = [];
+  Game.wanted = { heat: 0, stars: 0, hiddenTimer: 0 };
+  Game.mission = null; Game.race = null; Game.taxi = null;
+  Game.dialog = null; Game.toast = ''; Game.banner = ''; Game.bannerTimer = 0;
+  Game.time = 12.5; // fixed time of day for repeatable waves and flashes
+  Game.night = false;
+  Game.cash = 1250;
+  Game.missionIndex = 0; Game.missionDone = [];
+  Game.stats = { carsStolen: 3, shotsFired: 41, kills: 5, missionsDone: 4, racesWon: 1, faresDone: 2 };
+  spawnTraffic(14);
+  spawnParked(10);
+  spawnPeds(16);
+  spawnFare(); spawnFare();
+  spawnPickup(1200, 620, 'health');
+  spawnPickup(2600, 1000, 'armor');
+  spawnPickup(1800, 2600, 'ammo');
 }
 
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
-  }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
-    }
-  }
-  return best;
+function placePlayerInCar(car, weapon) {
+  var p = makePlayer(car.x, car.y);
+  p.car = car;
+  car.driver = 'player';
+  p.angle = car.angle;
+  if (weapon) { p.weapon = weapon; if (p.weapons.indexOf(weapon) < 0) p.weapons.push(weapon); }
+  Game.player = p;
+  return p;
 }
 
-/**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
- */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
+function placePlayerOnFoot(x, y, weapon) {
+  var p = makePlayer(x, y);
+  p.angle = -Math.PI / 2;
+  if (weapon) { p.weapon = weapon; if (p.weapons.indexOf(weapon) < 0) p.weapons.push(weapon); }
+  Game.player = p;
+  return p;
+}
+
+function setWantedStars(stars) {
+  Game.wanted.heat = stars === 0 ? 0 : (stars - 1) * 20 + 10;
+  Game.wanted.stars = stars;
+}
+
+function setMissionForShot(index, stepText) {
+  var def = MISSIONS[index];
+  Game.missionIndex = index;
+  Game.mission = { def: def, step: 0, state: {}, startedAt: 0 };
+  Game.objective = stepText || def.steps[0].text;
+}
+
+// Stage the named scene and freeze the game on it.
+function stageShot(name) {
+  Game.shotMode = name || 'cover';
+  var seed = 1;
+  try {
+    var q = new URLSearchParams(window.location.search);
+    seed = parseInt(q.get('seed') || '1', 10) || 1;
+  } catch (e) { seed = 1; }
+  resetWorldForShot(seed);
+  Game.screen = 'play';
+  var cam = Game.camera;
+  cam.zoom = 1;
+
+  if (name === 'drive') {
+    // Coastal boulevard drive: sedan at speed, beach and sea in frame.
+    var car = makeCar('sedan', 1150, 3426, 0);
+    car.color = '#2e6fb0'; car.driver = 'player'; car.speed = 480;
+    Game.cars.push(car);
+    placePlayerInCar(car, 'pistol');
+    var taxi = makeCar('taxi', 1500, 3374, Math.PI);
+    taxi.driver = 'traffic'; taxi.ai.mode = 'traffic'; taxi.ai.dir = 'w';
+    taxi.ai.target = nextIntersection(1500, 3374, 'w'); taxi.speed = 200;
+    Game.cars.push(taxi);
+    var van = makeCar('van', 900, 3426, 0);
+    van.driver = 'traffic'; van.ai.mode = 'traffic'; van.ai.dir = 'e';
+    van.ai.target = nextIntersection(900, 3426, 'e'); van.speed = 170;
+    Game.cars.push(van);
+    Game.objective = 'Free roam — cruise the beach boulevard';
+    cam.x = car.x + 120; cam.y = car.y - 40;
+  } else if (name === 'mission') {
+    // Harbor shootout: on foot with a rifle, clearing the warehouse.
+    setMissionForShot(7, 'Clear the warehouse');
+    var p = placePlayerOnFoot(2940, 1620, 'rifle');
+    p.ammo.rifle = 24; p.reserve.rifle = 60;
+    p.aimAngle = angleTo(p.x, p.y, 3120, 1520); p.angle = p.aimAngle;
+    spawnEnemy(3120, 1500, 'rifle');
+    spawnEnemy(3080, 1680, 'pistol');
+    spawnEnemy(3200, 1580, 'rifle');
+    spawnMuzzle(p.x + Math.cos(p.aimAngle) * 22, p.y + Math.sin(p.aimAngle) * 22, p.aimAngle);
+    fireBullet(p.x + Math.cos(p.aimAngle) * 30, p.y + Math.sin(p.aimAngle) * 30, p.aimAngle, 1300, 60, 'player');
+    var truck = makeCar('truck', 3050, 1420, Math.PI / 2);
+    truck.driver = 'none'; truck.ai.mode = 'parked';
+    Game.cars.push(truck);
+    spawnSmoke(3180, 1560, 3);
+    setWantedStars(2);
+    cam.x = 3030; cam.y = 1590; cam.zoom = 1.05;
+  } else if (name === 'night') {
+    // Night at the beach: neon palms, headlights, a patrol car closing in.
+    Game.night = true;
+    var p2 = placePlayerOnFoot(2380, 3420, 'pistol');
+    p2.angle = Math.PI;
+    var sport = makeCar('sport', 2520, 3426, Math.PI);
+    sport.color = '#f1c40f'; sport.driver = 'none'; sport.ai.mode = 'parked';
+    Game.cars.push(sport);
+    var cop = spawnPoliceCar(1980, 3426);
+    cop.angle = 0; cop.speed = 420;
+    setWantedStars(1);
+    Game.objective = 'Free roam — Solmara after dark';
+    cam.x = 2300; cam.y = 3400;
+  } else {
+    // COVER: police chase on a boulevard — wanted stars, minimap, mission
+    // objective, traffic and the rival's car all in one frame.
+    setMissionForShot(4, "Chase down the rival's Veloce");
+    var chase = makeCar('sport', 1500, 1826, 0);
+    chase.color = '#e74c3c'; chase.driver = 'player'; chase.speed = 470;
+    Game.cars.push(chase);
+    placePlayerInCar(chase, 'pistol');
+    var rival = makeCar('sport', 2150, 1826, 0);
+    rival.color = '#7a1f8f'; rival.driver = 'mission'; rival.ai.mode = 'flee'; rival.speed = 430;
+    Game.cars.push(rival);
+    Game.mission.state.targetCar = rival;
+    var pc1 = spawnPoliceCar(1180, 1826);
+    pc1.angle = 0; pc1.speed = 520;
+    var pc2 = spawnPoliceCar(1020, 1774);
+    pc2.angle = 0; pc2.speed = 500;
+    var t1 = makeCar('sedan', 1850, 1774, Math.PI);
+    t1.driver = 'traffic'; t1.ai.mode = 'traffic'; t1.ai.dir = 'w';
+    t1.ai.target = nextIntersection(1850, 1774, 'w'); t1.speed = 160;
+    Game.cars.push(t1);
+    var t2 = makeCar('van', 2400, 1874, 0);
+    t2.driver = 'traffic'; t2.ai.mode = 'traffic'; t2.ai.dir = 'e';
+    t2.ai.target = nextIntersection(2400, 1874, 'e'); t2.speed = 150;
+    Game.cars.push(t2);
+    setWantedStars(3);
+    addSkid(chase);
+    spawnSmoke(1180, 1826, 2);
+    spawnSparks(1350, 1830, 4);
+    cam.x = 1650; cam.y = 1810; cam.zoom = 0.95;
   }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
-  }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
+  // Keep the camera exactly where staged (no follow smoothing in shot mode).
+  Game.camera.x = cam.x; Game.camera.y = cam.y;
 }

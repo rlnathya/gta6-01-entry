@@ -1,53 +1,54 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
+// SOLMARA — input.js
+// Keyboard and mouse state. Keys are tracked by code; the mouse position is
+// converted to world coordinates by the camera each frame (render.js).
 
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
+var KEYS = {};
 
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
-
-export function createInput(target) {
-  let left = false;
-  let right = false;
-  let actions = 0;
-
-  window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
+function setupInput(canvas) {
+  window.addEventListener('keydown', function (e) {
+    if (!KEYS[e.code]) _edgeKeys[e.code] = true; // latch the press edge
+    KEYS[e.code] = true;
+    Game.keys[e.code] = true;
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].indexOf(e.code) >= 0) e.preventDefault();
+    if (Game.audio) Game.audio.ensure();
   });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
+  window.addEventListener('keyup', function (e) {
+    KEYS[e.code] = false;
+    Game.keys[e.code] = false;
   });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
-  window.addEventListener('blur', () => {
-    left = false;
-    right = false;
+  window.addEventListener('blur', function () {
+    for (var k in KEYS) KEYS[k] = false;
+    for (var e2 in _edgeKeys) _edgeKeys[e2] = false;
+    Game.keys = {};
   });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
+  canvas.addEventListener('mousemove', function (e) {
+    var r = canvas.getBoundingClientRect();
+    Game.mouse.x = e.clientX - r.left;
+    Game.mouse.y = e.clientY - r.top;
   });
+  canvas.addEventListener('mousedown', function (e) {
+    if (e.button === 0) { Game.mouse.down = true; Game.mouse.clicked = true; }
+    if (Game.audio) Game.audio.ensure();
+  });
+  window.addEventListener('mouseup', function (e) {
+    if (e.button === 0) Game.mouse.down = false;
+  });
+  canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+}
 
-  return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
-    },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
-    },
-  };
+// True while any of the given key codes is held.
+function keyDown() {
+  for (var i = 0; i < arguments.length; i++) if (KEYS[arguments[i]]) return true;
+  return false;
+}
+// True only on the frame the key was pressed (edge trigger).
+// The edge is latched in the keydown handler itself, so even a very quick
+// tap (shorter than one 60 fps frame) is never missed.
+var _edgeKeys = {};
+function keyPressed(code) {
+  if (_edgeKeys[code]) { _edgeKeys[code] = false; return true; }
+  return false;
+}
+function syncPrevKeys() {
+  // Kept for compatibility; edges are latched in the handler now.
 }

@@ -1,12 +1,17 @@
-// A working gta6-01 entry (Node 22, standard library only): the game is this directory's
-// game/ folder, plain static files a desktop browser loads offline (game/index.html and its ES
-// modules, no library and no network request), and the program hands it in. It copies game/ and
-// screenshots/ from beside this file to /output and writes /output/dossier.json, the summary the
-// judge reads, with the vendored make.fun library. Only the plumbing, not an open world: Block
-// Dodger, a plain 2D canvas game where a paddle dodges falling blocks and catches coins, with a
-// title screen, score, lives and levels, game over and restart, flat colours and no sound. Build
-// your own open-world crime game in its place (three.js or any library you vendor under game/),
-// put your 3 or 4 PNG or JPEG screenshots in screenshots/ (the first by name is the cover) and run it.
+// SOLMARA — a working gta6-01 entry (Node 22, standard library only).
+// The game is this directory's game/ folder: plain static files a desktop
+// browser loads offline (game/index.html plus its classic <script> files,
+// no library, no network request), and this program hands it in. It copies
+// game/ and screenshots/ from beside this file to /output and writes
+// /output/dossier.json, the summary the judge reads, with the vendored
+// make.fun library.
+//
+// The game itself is an original top-down open-world crime game set in the
+// fictional sun-soaked coastal city of Solmara: drive and steal six kinds of
+// cars, lose the police across a 1–5 star wanted level, run 10 story
+// missions for Rosa plus taxi fares and a beach race, fight on foot with
+// fists, pistol and rifle, and save progress to localStorage. Deterministic
+// screenshot scenes live behind ?shot=cover|drive|mission|night&seed=1.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
@@ -18,6 +23,10 @@ import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
+// The screenshots in screenshots/ are real renders of the game's own code,
+// taken deterministically with ?shot=<mode>&seed=1 (same seed, same bytes);
+// the first by name (1-cover.png) is the cover. main.ts runs twice with the
+// same bytes both runs.
 const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
 mkdirSync(out, { recursive: true });

@@ -1,61 +1,84 @@
-// Every tuning number and colour in one place. The playfield is a fixed 1280x720 logical area;
-// the renderer scales it to the window, so no rule below depends on the screen size.
+// SOLMARA — config.js
+// Shared constants, tuning and the single global game state object.
+// Every other source file reads and writes `Game` and the constants here.
 
-export const FIELD = { width: 1280, height: 720, groundY: 664 };
+var WORLD_SIZE = 3600;          // world is WORLD_SIZE x WORLD_SIZE pixels
+var ROAD_GAP = 400;             // distance between road centre lines
+var ROAD_W = 110;               // road width in pixels
+var LANE = 26;                  // lane offset from a road centre line
 
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
-export const STEP = 1 / 60;
+var SAVE_KEY = 'solmara-save-v1';
 
-export const PLAYER = {
-  width: 72,
-  height: 24,
-  speed: 560,
-  invulnerable: 1.5,
+// Player tuning
+var WALK_SPEED = 210;
+var SPRINT_SPEED = 320;
+var PLAYER_RADIUS = 13;
+var PLAYER_HEALTH = 100;
+var PLAYER_ARMOR_MAX = 100;
+
+// Wanted tuning (heat 0..100, stars derived from it)
+var WANTED_MAX_HEAT = 100;
+var HEAT_STEAL_CAR = 25;
+var HEAT_HIT_PED = 15;
+var HEAT_SHOT_FIRED = 4;
+var HEAT_KILL_COP = 30;
+var HEAT_KILL_PED = 20;
+var HEAT_DECAY_PER_SEC = 9;
+
+// The one global state object. Modules mutate its fields; main.js owns the loop.
+var Game = {
+  screen: 'title',        // title | play | pause | over | ending
+  overKind: '',           // 'wasted' | 'busted' | ''
+  time: 0,                // seconds since the run started
+  night: false,           // night palette when true (shot mode / late hours)
+  seed: 1,
+  rng: null,              // seeded RNG (rng.js)
+  city: null,             // city data (city.js)
+  player: null,           // player entity
+  cars: [],               // all cars (traffic + parked + police + mission)
+  peds: [],               // pedestrians (incl. taxi fares)
+  cops: [],               // police on foot
+  enemies: [],            // armed hostiles (mission combat)
+  bullets: [],            // projectiles
+  particles: [],          // smoke, sparks, explosions, pickups sparkles
+  pickups: [],            // health / armor / ammo / cash
+  decals: [],             // skid marks, scorch marks (fade slowly)
+  camera: { x: 0, y: 0, zoom: 1, shake: 0 },
+  wanted: { heat: 0, stars: 0, hiddenTimer: 0 },
+  cash: 250,
+  missionIndex: 0,        // index into MISSIONS (missions.js)
+  mission: null,          // active mission runtime state
+  missionDone: [],        // completed mission ids
+  objective: '',          // current objective line shown on the HUD
+  dialog: null,           // {lines:[], who:''} shown in the dialog panel
+  toast: '', toastTimer: 0,
+  banner: '', bannerTimer: 0, bannerSub: '',
+  race: null,             // active street race state
+  taxi: null,             // active taxi fare state
+  save: null,             // loaded save data (if any)
+  audio: null,            // audio engine (audio.js)
+  mouse: { x: 0, y: 0, wx: 0, wy: 0, down: false, clicked: false },
+  keys: {},
+  stats: { carsStolen: 0, shotsFired: 0, kills: 0, missionsDone: 0, racesWon: 0, faresDone: 0 },
+  shotMode: '',           // '' or cover|drive|mission|night (shots.js)
+  debug: false
 };
 
-export const LIVES = 3;
-
-export const BLOCK = {
-  minWidth: 40,
-  maxWidth: 110,
-  height: 36,
-  speed: 240,
-  speedPerLevel: 30,
-  speedJitter: 90,
-  interval: 0.55,
-  intervalScale: 0.88,
-  minInterval: 0.14,
-  dodgePoints: 1,
-};
-
-export const COIN = {
-  size: 24,
-  speed: 190,
-  speedPerLevel: 14,
-  interval: 1.4,
-  intervalJitter: 0.8,
-  points: 10,
-};
-
-/** Seconds of play per level, and the last level: speeds and spawn rates stop growing there. */
-export const LEVEL = { seconds: 12, max: 12 };
-
-/** How many falling things can exist at once; the pool is allocated once, at boot. */
-export const POOL_SIZE = 64;
-
-export const PALETTE = {
-  backdrop: '#11141b',
-  sky: '#1b1f2a',
-  ground: '#2a3040',
-  player: '#4fc3f7',
-  block: '#e5534b',
-  coin: '#f2c94c',
-  panel: '#252b38',
-  text: '#eef1f5',
-  muted: '#8b93a3',
-};
-
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
-
-/** Where the best score is kept between visits (this browser only). */
-export const BEST_KEY = 'block-dodger.best';
+// ---- small helpers shared by every module ----
+function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+function dist2(ax, ay, bx, by) { var dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; }
+function dist(ax, ay, bx, by) { return Math.sqrt(dist2(ax, ay, bx, by)); }
+function angleTo(ax, ay, bx, by) { return Math.atan2(by - ay, bx - ax); }
+function angleDiff(a, b) {
+  var d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+function fmtMoney(n) { return '$' + Math.floor(n).toLocaleString('en-US'); }
+function inRect(x, y, r) { return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; }
+function circleHitsRect(cx, cy, cr, r) {
+  var nx = clamp(cx, r.x, r.x + r.w), ny = clamp(cy, r.y, r.y + r.h);
+  return dist2(cx, cy, nx, ny) < cr * cr;
+}
